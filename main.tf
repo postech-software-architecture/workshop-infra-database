@@ -115,10 +115,8 @@ resource "aws_db_instance" "postgres" {
   skip_final_snapshot = true
   deletion_protection = var.deletion_protection
 
-  # Observabilidade do banco (a app expõe as metricas de negocio; aqui e infra).
-  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
-
-  # Academy: sem permissao de IAM para criar a role do Enhanced Monitoring.
+  # Academy: sem Enhanced Monitoring nem exports que criariam CloudWatch Log
+  # Groups residuais fora deste state e poderiam continuar gerando custo.
   monitoring_interval = 0
 
   auto_minor_version_upgrade = true

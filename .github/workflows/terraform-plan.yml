@@ -80,26 +80,7 @@ jobs:
           cat plan.txt
       - name: Aplicar gates ao plan
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          terraform show -json plan.bin | jq -e '
-            [(.resource_changes // [])[] | select(.mode == "managed") | .type
-              | select(. != "aws_db_instance" and . != "aws_db_subnet_group" and . != "aws_security_group")]
-            | length == 0
-          ' >/dev/null || { echo "::error::Plan viola a fronteira de database."; exit 1; }
-          terraform show -json plan.bin | jq -e '
-            [.planned_values.root_module.resources[]? | select(.address == "aws_db_instance.postgres")][0] as $rds
-            | $rds.values.publicly_accessible == false and $rds.values.storage_encrypted == true
-          ' >/dev/null || { echo "::error::O RDS planejado deve ser privado e criptografado."; exit 1; }
-          terraform show -json plan.bin | jq -e '
-            [.planned_values.root_module.resources[]? | select(.address == "aws_security_group.db")][0] as $sg
-            | ($sg.values.ingress | length) == 1
-              and ($sg.values.ingress | all(
-                ((.cidr_blocks // []) | length) == 0
-                and ((.ipv6_cidr_blocks // []) | length) == 0
-                and ((.prefix_list_ids // []) | length) == 0
-                and ((.security_groups // []) | length) == 1))
-          ' >/dev/null || { echo "::error::O SG planejado deve aceitar apenas o SG cliente, sem CIDR."; exit 1; }
+        run: bash .github/scripts/validate-plan.sh plan.bin apply
       - name: Publicar somente o plan textual sanitizado
         uses: actions/upload-artifact@v4
         with:

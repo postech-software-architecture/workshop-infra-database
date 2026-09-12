@@ -14,6 +14,15 @@ if ! terraform state list >"${state_list}" 2>"${state_error}"; then
   fi
 fi
 
+expected_state=$'aws_db_instance.postgres\naws_db_subnet_group.this\naws_security_group.db'
+# Data sources tambem podem aparecer no state, mas nao sao recursos gerenciados.
+actual_state="$(awk '$0 !~ /(^|\.)data\./ { print }' "${state_list}" | sort -u)"
+if [[ -n "${actual_state}" && "${actual_state}" != "${expected_state}" ]]; then
+  echo "::error::O state database contem enderecos ausentes ou extras. Esperados exatamente os tres enderecos canonicos."
+  printf 'State atual:\n%s\n' "${actual_state}"
+  exit 1
+fi
+
 state_db=0; grep -Fxq 'aws_db_instance.postgres' "${state_list}" && state_db=1
 state_subnets=0; grep -Fxq 'aws_db_subnet_group.this' "${state_list}" && state_subnets=1
 state_sg=0; grep -Fxq 'aws_security_group.db' "${state_list}" && state_sg=1

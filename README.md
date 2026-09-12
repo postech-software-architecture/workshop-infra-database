@@ -14,7 +14,9 @@ security group.
 | **Nao contem** | VPC, subnets, EKS, node group, LB Controller — vivem em [workshop-infra-kubernetes](https://github.com/postech-software-architecture/workshop-infra-kubernetes) e sao **lidos** via contrato |
 | **Nao contem** | Migrations Flyway — permanecem no repo da aplicacao |
 
-A CI verifica a fronteira: o job falha se um `aws_eks_*`/`aws_vpc`/`aws_subnet` aparecer.
+A CI exige exatamente `aws_db_instance.postgres`, `aws_db_subnet_group.this` e
+`aws_security_group.db`. Qualquer outro endereco gerenciado e bloqueado, inclusive
+outro recurso dos mesmos tipos permitidos.
 
 ## Primeiro apply: inventario antes de criar ou importar
 
@@ -120,8 +122,9 @@ com a senha anterior perde acesso ao banco.
 - `storage_encrypted = true`
 - Ingress 5432 **somente** do `db_client_sg_id`; nenhum CIDR aberto
 - `backup_retention_period` 7 dias, janela fora do horario de demonstracao
-- `enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]`
 - `monitoring_interval = 0` — o Academy nao permite criar a role do Enhanced Monitoring
+- exports de logs do RDS desabilitados neste ambiente Academy para nao criar CloudWatch
+  Log Groups fora deste state, que sobreviveriam ao destroy e poderiam deixar custo residual
 
 ## Rodar
 
@@ -135,10 +138,11 @@ export TF_VAR_db_password='...'
 terraform init && terraform plan
 ```
 
-Antes do primeiro apply, execute o inventario dos tres objetos descrito acima. Revise
-o plan: este repo pode criar somente subnet group, SG e instancia RDS; deve haver
-zero recursos de VPC, EKS ou node group. `publicly_accessible = false`, criptografia e
-ingress exclusivamente por `db_client_sg_id` sao invariantes da entrega.
+Antes do primeiro apply, execute o inventario dos tres objetos descrito acima. State,
+plan e destroy devem conter exatamente os tres enderecos canonicos, sem recurso extra
+nem mesmo dos mesmos tipos. `publicly_accessible = false`, criptografia, subnet group
+esperado e ingress TCP/5432 exclusivamente do `db_client_sg_id` sao invariantes da
+entrega e voltam a ser consultados diretamente na AWS depois do apply.
 
 ## Pipelines operacionais
 

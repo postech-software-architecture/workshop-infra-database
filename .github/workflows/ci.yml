@@ -46,13 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Bloquear recursos fora do state de database
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          forbidden='resource[[:space:]]+"(aws_eks_|aws_vpc"|aws_subnet"|aws_nat_gateway"|aws_internet_gateway"|aws_route_table"|aws_lb")'
-          if grep -RInE --include='*.tf' "$forbidden" .; then
-            echo "::error::O state database nao pode gerenciar VPC, subnets, EKS ou load balancer."
-            exit 1
-          fi
+        run: bash .github/scripts/check-resource-boundary.sh
       - name: Exigir RDS privado e criptografado
         shell: bash
         run: |

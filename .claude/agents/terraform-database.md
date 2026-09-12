@@ -81,6 +81,9 @@ Regras não negociáveis:
 - Se qualquer objeto existir fora deste state, **aborte** e reconcilie/importe; criação só
   é permitida quando o inventário dos três estiver vazio.
 - **Nunca** deixar dois projetos gerenciarem o mesmo recurso.
+- Configuracao, state, plan e destroy aceitam somente os enderecos
+  `aws_db_instance.postgres`, `aws_db_subnet_group.this` e
+  `aws_security_group.db`; outro endereco e bloqueado mesmo se repetir um tipo permitido.
 - Se o `plan` pós-import quiser **substituir** (`must be replaced`) a instância, **pare**:
   ajuste a config até virar `update in-place` ou `no changes`. Replace = perda de dados.
 
@@ -172,6 +175,8 @@ variable "db_password" {
 - Não use `lifecycle.ignore_changes` em `password`: alterar `TF_VAR_db_password` deve
   rotacionar a senha master in-place. Preconfigure a mesma senha nos Environments dos
   consumidores e faça o redeploy deles na mesma janela operacional do apply.
+- No Academy, mantenha exports de logs do RDS desabilitados. CloudWatch Log Groups
+  criados implicitamente ficam fora deste state e podem sobreviver ao destroy com custo residual.
 
 Outputs permitidos (não sensíveis):
 

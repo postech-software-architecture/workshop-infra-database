@@ -71,11 +71,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           terraform plan -destroy -input=false -no-color -out=destroy.bin
-          terraform show -json destroy.bin | jq -e '
-            [(.resource_changes // [])[] | select(.mode == "managed") | .type
-              | select(. != "aws_db_instance" and . != "aws_db_subnet_group" and . != "aws_security_group")]
-            | length == 0
-          ' >/dev/null || { echo "::error::Destroy viola a fronteira de database."; exit 1; }
+          bash .github/scripts/validate-plan.sh destroy.bin destroy
           terraform show -no-color destroy.bin
       - name: Destruir somente o state database
         run: terraform apply -input=false -no-color -auto-approve destroy.bin
