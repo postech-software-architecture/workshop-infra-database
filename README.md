@@ -115,6 +115,34 @@ o plan: este repo pode criar somente subnet group, SG e instancia RDS; deve have
 zero recursos de VPC, EKS ou node group. `publicly_accessible = false`, criptografia e
 ingress exclusivamente por `db_client_sg_id` sao invariantes da entrega.
 
+## Pipelines operacionais
+
+| Workflow | Gatilho | Protecao principal |
+|---|---|---|
+| `ci.yml` | push/PR | fmt/validate e gates estaticos de fronteira, RDS privado, criptografia e SG sem CIDR |
+| `terraform-plan.yml` | PR | inventario AWS x state e gates sobre o plan real; publica apenas texto por 7 dias |
+| `terraform-apply.yml` | manual na `main` | texto `APLICAR DATABASE PROD`, Environment `prod`, inventario e bloqueio de replace/destroy |
+| `terraform-destroy.yml` | manual na `main` | texto `DESTRUIR DATABASE ANTES DO CLUSTER`, Environment `prod` e destroy isolado |
+
+Os workflows AWS exigem `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN` e `DB_PASSWORD` no Environment `prod`. Credenciais do Academy
+expiradas falham antes do `terraform init`. O bucket
+`soat-tc3-tfstate-mateus-paz` e a tabela `soat-tc3-tflock` sao bootstrap externo:
+devem estar ativos antes do plan/apply/destroy e nunca sao removidos por estes
+workflows. No Academy, o destroy nao cria snapshot persistente, coerente com
+`skip_final_snapshot = true`, para nao deixar custo residual fora do state.
+
+Enquanto nao houver uma sessao Academy valida, mantenha a repository variable
+`AWS_CREDENTIALS_READY=false`: o workflow de plan fica explicitamente ignorado e os
+gates estaticos da CI continuam rodando. Depois de renovar as quatro secrets acima,
+defina a variable como `true` e atualize o PR para executar o plan real.
+
+O inventario aceita somente dois estados completos: os tres objetos ausentes na AWS
+e no state (`CREATE`), ou os tres presentes em ambos (`MANAGED`). Recurso apenas na
+AWS exige import/reconciliacao; recurso apenas no state indica drift; topologia
+parcial tambem bloqueia. O destroy do banco deve terminar **antes** do destroy do
+cluster, pois o banco consome a VPC e as subnets do state `cluster/`.
+
 ## Agentes
 
 Ver [.claude/agents/README.md](.claude/agents/README.md). Dono: `terraform-database`.

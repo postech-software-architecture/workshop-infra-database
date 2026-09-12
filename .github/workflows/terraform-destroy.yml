@@ -1,0 +1,104 @@
+name: Terraform — Destroy database
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmacao:
+        description: Digite DESTRUIR DATABASE ANTES DO CLUSTER
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VAR_cluster_state_bucket: soat-tc3-tfstate-mateus-paz
+
+jobs:
+  confirmation:
+    name: confirmar destruicao
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Exigir branch e texto exatos
+        shell: bash
+        env:
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${GITHUB_REF}" == 'refs/heads/main' ]] || { echo "::error::Destroy permitido somente a partir da main."; exit 1; }
+          [[ "${CONFIRMACAO}" == 'DESTRUIR DATABASE ANTES DO CLUSTER' ]] || { echo "::error::Confirmacao invalida."; exit 1; }
+
+  destroy:
+    name: destroy database (prod)
+    needs: confirmation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: prod
+    concurrency:
+      group: terraform-database-prod
+      cancel-in-progress: false
+    env:
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - name: Validar credencial e backend preservado
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::${TF_VAR_db_password}"
+          aws sts get-caller-identity --query Account --output text >/dev/null
+          aws s3api head-bucket --bucket soat-tc3-tfstate-mateus-paz
+          aws dynamodb describe-table --table-name soat-tc3-tflock --query 'Table.TableStatus' --output text | grep -qx ACTIVE
+      - name: terraform init
+        run: terraform init -input=false -no-color
+      - name: Exigir banco completo na AWS e no state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          state_list="${RUNNER_TEMP}/database-state-list.txt"
+          terraform state list >"$state_list"
+          grep -Fxq 'aws_db_instance.postgres' "$state_list"
+          grep -Fxq 'aws_db_subnet_group.this' "$state_list"
+          grep -Fxq 'aws_security_group.db' "$state_list"
+          aws rds describe-db-instances --db-instance-identifier workshop-db >/dev/null
+          aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets >/dev/null
+          expected_vpc_id="$(printf 'local.vpc_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
+          [[ "$expected_vpc_id" =~ ^vpc-[0-9a-f]+$ ]] || { echo "::error::Contrato do cluster nao forneceu VPC valida."; exit 1; }
+          sg_count="$(aws ec2 describe-security-groups \
+            --filters "Name=vpc-id,Values=${expected_vpc_id}" 'Name=group-name,Values=workshop-db-sg' 'Name=tag:Project,Values=workshop' \
+            --query 'length(SecurityGroups)' --output text)"
+          [[ "$sg_count" == '1' ]] || { echo "::error::SG ausente ou duplicado na VPC esperada."; exit 1; }
+          echo 'Inventario consistente para destroy.'
+      - name: Planejar destroy e confirmar fronteira
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          terraform plan -destroy -input=false -no-color -out=destroy.bin
+          terraform show -json destroy.bin | jq -e '
+            [(.resource_changes // [])[] | select(.mode == "managed") | .type
+              | select(. != "aws_db_instance" and . != "aws_db_subnet_group" and . != "aws_security_group")]
+            | length == 0
+          ' >/dev/null || { echo "::error::Destroy viola a fronteira de database."; exit 1; }
+          terraform show -no-color destroy.bin
+      - name: Destruir somente o state database
+        run: terraform apply -input=false -no-color -auto-approve destroy.bin
+      - name: Confirmar backend e lock preservados
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          aws s3api head-bucket --bucket soat-tc3-tfstate-mateus-paz
+          aws dynamodb describe-table --table-name soat-tc3-tflock --query 'Table.TableStatus' --output text | grep -qx ACTIVE
+          echo 'Backend S3 e lock DynamoDB preservados. Destrua o cluster somente depois deste workflow.'
