@@ -2,9 +2,8 @@
 # pipelines que montam o k8s Secret.
 #
 # A SENHA NAO ESTA AQUI, de proposito: ela vive em Environment secret, consumida
-# igualmente pelo k8s Secret e pela Lambda. O outputs.tf antigo (repo da aplicacao)
-# expunha db_password como output — mesmo com sensitive = true, isso a coloca no
-# state, que passaria a ser compartilhado entre repos. Corrigido nesta extracao.
+# igualmente pelo k8s Secret e pela Lambda. Ainda assim, como atributo do RDS, fica
+# no state do banco; por isso o backend e criptografado e seu acesso e restrito.
 
 output "db_host" {
   description = "Endpoint (host) do RDS. Consumido por: serverless, k8s Secret."
@@ -22,7 +21,7 @@ output "db_name" {
 }
 
 output "db_username" {
-  description = "Usuario master. A senha vem de Environment secret, nunca daqui."
+  description = "Usuario master. A senha vem de Environment secret e nunca e publicada como output."
   value       = aws_db_instance.postgres.username
 }
 
@@ -37,6 +36,6 @@ output "db_security_group_id" {
 }
 
 output "db_instance_identifier" {
-  description = "Identificador da instancia — usado no `terraform import` e em snapshots."
+  description = "Identificador da instancia — usado no inventario, eventual import e snapshots."
   value       = aws_db_instance.postgres.identifier
 }

@@ -16,27 +16,40 @@ security group.
 
 A CI verifica a fronteira: o job falha se um `aws_eks_*`/`aws_vpc`/`aws_subnet` aparecer.
 
-## ⚠️ `terraform import` e OBRIGATORIO
+## Primeiro apply: inventario antes de criar ou importar
 
-Ja existe uma instancia RDS provisionada **e semeada** pelo state antigo (o do repo da
-aplicacao, em `infra/eks/`). Rodar `apply` direto num state novo cria um **segundo**
-banco e orfana o semeado — destruindo os dados que o checkpoint **G4** usa.
+A conta alvo atual esta vazia, portanto o caminho esperado e a **criacao nova** dos
+tres recursos. Isso nao elimina a guarda contra colisao: imediatamente antes do
+primeiro `plan/apply`, consulte separadamente cada nome gerenciado:
 
 ```bash
-# 1. Descobrir o identificador real
-aws rds describe-db-instances --query 'DBInstances[].DBInstanceIdentifier'
+# Instancia: deve retornar vazio ou DBInstanceNotFound
+aws rds describe-db-instances --db-instance-identifier workshop-db
 
-# 2. Importar ANTES de qualquer apply
+# Subnet group: deve retornar vazio ou DBSubnetGroupNotFoundFault
+aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets
+
+# Security group: a lista deve estar vazia
+aws ec2 describe-security-groups \
+  --filters Name=group-name,Values=workshop-db-sg \
+            Name=tag:Project,Values=workshop
+```
+
+Somente quando **os tres** resultados confirmarem ausencia o `plan` pode propor criar
+`workshop-db`, `workshop-db-subnets` e `workshop-db-sg`. Se qualquer objeto existir
+sem estar no state `database/terraform.tfstate`, **aborte**: identifique sua origem,
+reconcilie a configuracao e importe o recurso correspondente antes de aplicar. Nunca
+assuma que a ausencia da instancia prova a ausencia do subnet group ou do SG.
+
+Exemplo de recuperacao, somente depois de confirmar que o objeto existente deve ser
+adotado por este state:
+
+```bash
 terraform import aws_db_instance.postgres workshop-db
 terraform import aws_db_subnet_group.this workshop-db-subnets
 terraform import aws_security_group.db sg-xxxxxxxx
-
-# 3. Conferir que o plan esta VAZIO (ou so com mudancas esperadas)
-terraform plan
+terraform plan # sem replacement nem mudanca destrutiva inesperada
 ```
-
-Um `plan` que proponha **criar** `aws_db_instance.postgres` significa que o import
-nao foi feito. **Nao aplique.**
 
 ## Contrato consumido
 
@@ -51,14 +64,30 @@ Lido do repo de cluster, read-only:
 Com backend remoto: `cluster_state_bucket = "..."`. Sem backend (fallback do §4,
 ADR-005): as vars `*_fallback`, alimentadas pelo artifact `contracts/outputs.json`.
 
-## A senha
+## Backend e senha
+
+O backend S3 esta ativo em `versions.tf` com:
+
+| Campo | Valor |
+|---|---|
+| bucket | `soat-tc3-tfstate-mateus-paz` |
+| key | `database/terraform.tfstate` |
+| regiao | `us-east-1` |
+| lock DynamoDB | `soat-tc3-tflock` |
+| criptografia | habilitada |
+
+Bucket e tabela sao o bootstrap externo validado na W0 e precisam existir antes do
+`terraform init` com backend. `terraform init -backend=false` continua disponivel
+para validacao estatica sem credenciais.
 
 `var.db_password` **nao tem default**. Vem de `TF_VAR_db_password`, de Environment
 secret — a mesma consumida pelo k8s Secret e pela Lambda.
 
-Ela **nao** e exposta como output. O `outputs.tf` antigo do repo da aplicacao expunha
-`db_password` (mesmo com `sensitive = true`), o que a colocava no state — inaceitavel
-quando o state passa a ser lido por outros repos. Corrigido nesta extracao.
+Ela **nao** e exposta como output e `sensitive = true` impede sua exibicao normal no
+CLI. Contudo, o provider precisa armazenar o atributo no state para gerenciar o RDS:
+a senha fica no state remoto criptografado. Portanto, acesso ao bucket/state deve ser
+restrito; `sensitive` nao remove o dado do state. Consumidores recebem a mesma senha
+por secret do Environment, nunca via `terraform_remote_state`.
 
 ## Seguranca
 
@@ -73,12 +102,18 @@ quando o state passa a ser lido por outros repos. Corrigido nesta extracao.
 
 ```bash
 terraform fmt -check
-terraform init -backend=false && terraform validate   # sem credencial
+terraform init -backend=false
+terraform validate # sem credencial
 
 export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
 export TF_VAR_db_password='...'
 terraform init && terraform plan
 ```
+
+Antes do primeiro apply, execute o inventario dos tres objetos descrito acima. Revise
+o plan: este repo pode criar somente subnet group, SG e instancia RDS; deve haver
+zero recursos de VPC, EKS ou node group. `publicly_accessible = false`, criptografia e
+ingress exclusivamente por `db_client_sg_id` sao invariantes da entrega.
 
 ## Agentes
 

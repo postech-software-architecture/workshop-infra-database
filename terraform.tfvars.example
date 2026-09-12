@@ -4,8 +4,8 @@ project = "workshop"
 
 # db_password NAO vai aqui: use TF_VAR_db_password vindo de Environment secret.
 
-# Com backend remoto (preferido):
-# cluster_state_bucket = "soat-tc3-tfstate"
+# Bucket do state do CLUSTER, usado apenas para ler seu contrato de outputs:
+# cluster_state_bucket = "soat-tc3-tfstate-mateus-paz"
 
 # Fallback sem backend (ADR-005) — valores do artifact contracts/outputs.json:
 # vpc_id_fallback             = "vpc-xxxxxxxx"
