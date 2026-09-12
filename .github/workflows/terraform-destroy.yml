@@ -15,6 +15,8 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   TF_VAR_cluster_state_bucket: soat-tc3-tfstate-mateus-paz
+  BACKEND_BUCKET: soat-tc3-tfstate-mateus-paz
+  LOCK_TABLE: soat-tc3-tflock
 
 jobs:
   confirmation:
@@ -56,32 +58,14 @@ jobs:
           terraform_wrapper: false
       - name: Validar credencial e backend preservado
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          echo "::add-mask::${TF_VAR_db_password}"
-          aws sts get-caller-identity --query Account --output text >/dev/null
-          aws s3api head-bucket --bucket soat-tc3-tfstate-mateus-paz
-          aws dynamodb describe-table --table-name soat-tc3-tflock --query 'Table.TableStatus' --output text | grep -qx ACTIVE
+        run: bash .github/scripts/preflight-backend.sh
       - name: terraform init
         run: terraform init -input=false -no-color
       - name: Exigir banco completo na AWS e no state
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          state_list="${RUNNER_TEMP}/database-state-list.txt"
-          terraform state list >"$state_list"
-          grep -Fxq 'aws_db_instance.postgres' "$state_list"
-          grep -Fxq 'aws_db_subnet_group.this' "$state_list"
-          grep -Fxq 'aws_security_group.db' "$state_list"
-          aws rds describe-db-instances --db-instance-identifier workshop-db >/dev/null
-          aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets >/dev/null
-          expected_vpc_id="$(printf 'local.vpc_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
-          [[ "$expected_vpc_id" =~ ^vpc-[0-9a-f]+$ ]] || { echo "::error::Contrato do cluster nao forneceu VPC valida."; exit 1; }
-          sg_count="$(aws ec2 describe-security-groups \
-            --filters "Name=vpc-id,Values=${expected_vpc_id}" 'Name=group-name,Values=workshop-db-sg' 'Name=tag:Project,Values=workshop' \
-            --query 'length(SecurityGroups)' --output text)"
-          [[ "$sg_count" == '1' ]] || { echo "::error::SG ausente ou duplicado na VPC esperada."; exit 1; }
-          echo 'Inventario consistente para destroy.'
+        env:
+          REQUIRE_MANAGED: "true"
+        run: bash .github/scripts/inventory-database.sh
       - name: Planejar destroy e confirmar fronteira
         shell: bash
         run: |
@@ -98,7 +82,5 @@ jobs:
       - name: Confirmar backend e lock preservados
         shell: bash
         run: |
-          set -Eeuo pipefail
-          aws s3api head-bucket --bucket soat-tc3-tfstate-mateus-paz
-          aws dynamodb describe-table --table-name soat-tc3-tflock --query 'Table.TableStatus' --output text | grep -qx ACTIVE
+          bash .github/scripts/preflight-backend.sh
           echo 'Backend S3 e lock DynamoDB preservados. Destrua o cluster somente depois deste workflow.'

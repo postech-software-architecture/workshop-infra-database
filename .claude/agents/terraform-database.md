@@ -61,7 +61,7 @@ apply, verifique individualmente os três nomes gerenciados:
 aws rds describe-db-instances --db-instance-identifier workshop-db
 aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets
 aws ec2 describe-security-groups \
-  --filters Name=group-name,Values=workshop-db-sg Name=tag:Project,Values=workshop
+  --filters Name=vpc-id,Values=vpc-xxxxxxxx Name=group-name,Values=workshop-db-sg
 
 # Se um recurso preexistente for confirmado como adotavel, importe somente ele
 terraform import aws_db_instance.postgres      workshop-db
@@ -76,6 +76,8 @@ terraform plan
 Regras não negociáveis:
 - **Nunca** rodar o primeiro `apply` sem inventariar os três tipos de recurso. A ausência
   da instância não prova a ausência do subnet group ou do SG.
+- A existência do SG é determinada por VPC + nome, sem filtro de tag. Se existir,
+  valide `Project=workshop` separadamente; tag divergente exige reconciliação/import.
 - Se qualquer objeto existir fora deste state, **aborte** e reconcilie/importe; criação só
   é permitida quando o inventário dos três estiver vazio.
 - **Nunca** deixar dois projetos gerenciarem o mesmo recurso.
@@ -167,6 +169,9 @@ variable "db_password" {
   exposição normal no CLI/log, não remove o valor do state.
 - `sensitive = true` na variável, e `::add-mask::` no step da pipeline que a manipula.
 - Nada de valor default versionado. Nada de `terraform.tfvars` no git — só o `.example`.
+- Não use `lifecycle.ignore_changes` em `password`: alterar `TF_VAR_db_password` deve
+  rotacionar a senha master in-place. Preconfigure a mesma senha nos Environments dos
+  consumidores e faça o redeploy deles na mesma janela operacional do apply.
 
 Outputs permitidos (não sensíveis):
 

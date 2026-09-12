@@ -15,6 +15,8 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   TF_VAR_cluster_state_bucket: soat-tc3-tfstate-mateus-paz
+  BACKEND_BUCKET: soat-tc3-tfstate-mateus-paz
+  LOCK_TABLE: soat-tc3-tflock
 
 jobs:
   confirmation:
@@ -56,58 +58,12 @@ jobs:
           terraform_wrapper: false
       - name: Validar credencial e bootstrap do backend
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          echo "::add-mask::${TF_VAR_db_password}"
-          aws sts get-caller-identity --query Account --output text >/dev/null
-          aws s3api head-bucket --bucket soat-tc3-tfstate-mateus-paz
-          aws dynamodb describe-table --table-name soat-tc3-tflock --query 'Table.TableStatus' --output text | grep -qx ACTIVE
+        run: bash .github/scripts/preflight-backend.sh
       - name: terraform init
         run: terraform init -input=false -no-color
       - name: Inventariar AWS e comparar com o state
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          state_list="${RUNNER_TEMP}/database-state-list.txt"
-          state_error="${RUNNER_TEMP}/database-state-error.txt"
-          if ! terraform state list >"$state_list" 2>"$state_error"; then
-            if grep -q 'No state file was found' "$state_error"; then
-              : >"$state_list"
-            else
-              echo "::error::Falha ao ler o state remoto de database."
-              exit 1
-            fi
-          fi
-          state_db=0; grep -Fxq 'aws_db_instance.postgres' "$state_list" && state_db=1
-          state_subnets=0; grep -Fxq 'aws_db_subnet_group.this' "$state_list" && state_subnets=1
-          state_sg=0; grep -Fxq 'aws_security_group.db' "$state_list" && state_sg=1
-
-          error_file="${RUNNER_TEMP}/aws-inventory-error.txt"
-          if aws rds describe-db-instances --db-instance-identifier workshop-db >/dev/null 2>"$error_file"; then aws_db=1
-          elif grep -q 'DBInstanceNotFound' "$error_file"; then aws_db=0
-          else echo "::error::Falha ao inventariar a instancia RDS."; exit 1; fi
-          if aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets >/dev/null 2>"$error_file"; then aws_subnets=1
-          elif grep -q 'DBSubnetGroupNotFound' "$error_file"; then aws_subnets=0
-          else echo "::error::Falha ao inventariar o DB subnet group."; exit 1; fi
-
-          expected_vpc_id="$(printf 'local.vpc_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
-          [[ "$expected_vpc_id" =~ ^vpc-[0-9a-f]+$ ]] || { echo "::error::Contrato do cluster nao forneceu VPC valida."; exit 1; }
-          sg_count="$(aws ec2 describe-security-groups \
-            --filters "Name=vpc-id,Values=${expected_vpc_id}" 'Name=group-name,Values=workshop-db-sg' 'Name=tag:Project,Values=workshop' \
-            --query 'length(SecurityGroups)' --output text)"
-          [[ "$sg_count" =~ ^[0-9]+$ ]] && (( sg_count <= 1 )) || { echo "::error::Inventario inconsistente do SG."; exit 1; }
-          aws_sg=0; (( sg_count == 1 )) && aws_sg=1
-
-          aws_signature="${aws_db}${aws_subnets}${aws_sg}"
-          state_signature="${state_db}${state_subnets}${state_sg}"
-          if [[ "$aws_signature" == '000' && "$state_signature" == '000' ]]; then
-            echo 'Inventario CREATE confirmado.'
-          elif [[ "$aws_signature" == '111' && "$state_signature" == '111' ]]; then
-            echo 'Inventario MANAGED confirmado.'
-          else
-            echo "::error::AWS e state divergem ou a topologia esta parcial. Importe/reconcilie antes do apply."
-            exit 1
-          fi
+        run: bash .github/scripts/inventory-database.sh
       - name: Planejar sem destruicao implicita
         shell: bash
         run: |

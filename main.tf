@@ -126,9 +126,4 @@ resource "aws_db_instance" "postgres" {
 
   tags = { Project = var.project }
 
-  lifecycle {
-    # A senha e rotacionada fora do Terraform (Environment secret); nao reconciliar
-    # automaticamente uma diferenca nesse atributo.
-    ignore_changes = [password]
-  }
 }
