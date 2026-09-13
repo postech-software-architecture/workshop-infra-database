@@ -8,13 +8,13 @@ terraform {
     }
   }
 
-  # State PROPRIO, separado do cluster. Chave 'database/' (o cluster usa 'cluster/').
-  # Comentado ate o spike da W0 confirmar S3+DynamoDB no Academy.
-  # backend "s3" {
-  #   bucket         = "soat-tc3-tfstate"
-  #   key            = "database/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "soat-tc3-tflock"
-  #   encrypt        = true
-  # }
+  # State PROPRIO, separado do cluster. O bootstrap do bucket e da tabela de lock
+  # e feito fora deste state para evitar a dependencia circular do backend.
+  backend "s3" {
+    bucket         = "soat-tc3-tfstate-mateus-paz"
+    key            = "database/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "soat-tc3-tflock"
+    encrypt        = true
+  }
 }

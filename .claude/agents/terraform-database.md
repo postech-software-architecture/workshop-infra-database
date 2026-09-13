@@ -5,7 +5,8 @@ Autorar e operar o Terraform do repositório `workshop-infra-database`: DB subne
 security group do banco, `aws_db_instance` PostgreSQL, criptografia, backup/retenção e
 política de snapshot. State **próprio**, separado do cluster.
 
-Atua na fase **W3**. O ensaio do `terraform import` acontece na **W2**, antes.
+Atua na fase **W3**. Na conta alvo atual, o inventario da W2 confirmou que nao ha RDS
+legado a preservar; o primeiro provisionamento esperado e uma criacao nova.
 
 ## Fronteira
 
@@ -19,8 +20,6 @@ caminho**. Se você precisar de uma mudança fora da lista Owns, peça ao agente
 - Recursos: `aws_db_subnet_group`, `aws_security_group` **do banco**, `aws_db_instance`,
   parameter/option groups se usados
 - Outputs não sensíveis: `db_host`, `db_port`, `db_name`, `db_username`
-- No repo da app: **remoção** dos blocos `aws_db_*` de `infra/eks/main.tf` e dos 5 outputs
-  `db_*` de `infra/eks/outputs.tf` — coordenado com `terraform-cluster` no mesmo PR de extração
 
 ### Não toca
 - VPC, subnets, NAT, EKS, node group, `metrics-server`, LB Controller
@@ -35,40 +34,36 @@ caminho**. Se você precisar de uma mudança fora da lista Owns, peça ao agente
 ## Contexto do projeto
 
 ### Estado real verificado (o repo ganha do doc de planejamento)
-- `infra/eks/main.tf` contém hoje, no **mesmo state** do EKS:
-  `aws_db_subnet_group.this`, `aws_security_group.db` e `aws_db_instance.postgres`
-  (`engine = postgres`, `engine_version = "15"`, `db.t3.micro`, `allocated_storage = 20`,
-  `skip_final_snapshot = true`, `publicly_accessible = false`).
-- O ingress atual é `security_groups = [module.eks.node_security_group_id]` — só os nodes.
-  Na W3 isso passa a ser o **`db_client_sg_id`** do contrato de outputs, para que Lambda
-  também seja autorizada sem CIDR amplo.
-- `infra/eks/outputs.tf` **emite `db_password` como output** (`sensitive = true`). Isso sai:
-  senha não trafega por state nem por output.
+- O repositório possui state próprio e não gerencia VPC, EKS ou node group.
+- A conta alvo atual não contém a instância RDS legada da fase anterior; criação nova é
+  permitida após inventariar separadamente instância, subnet group e security group.
+- O ingress do banco usa apenas **`db_client_sg_id`** do contrato de outputs, sem CIDR,
+  permitindo autorizar os consumidores associados a esse SG.
+- A senha não é output nem atravessa `terraform_remote_state`; como atributo gerenciado,
+  porém, ela fica no state remoto criptografado.
 - A aplicação usa PostgreSQL 15, Flyway com **19 migrations**, JPA + JDBC, Testcontainers, 17
   tabelas. Já existe `V0.20260507210000__seed_demo_workshop_data.sql`.
-- State Terraform é **local** hoje, sem backend remoto.
+- O backend remoto S3 usa a chave isolada `database/terraform.tfstate`, criptografia e
+  lock em DynamoDB; o bootstrap desses dois serviços fica fora deste state.
 
 ### Por que o banco tem repo e state próprios
 O problema da Fase 3 não é escolher banco novo — é **separar o ciclo de vida do banco do
 ciclo de vida do EKS**. Destruir o cluster para economizar crédito do Academy não pode
 destruir os dados semeados que o checkpoint G4 usa.
 
-## `terraform import` é OBRIGATÓRIO
+## Inventário obrigatório; import condicional
 
-O ponto mais crítico deste agente. A instância RDS **já existe** e já está semeada.
-
-**Aplicar a config extraída num state novo sem `import` cria um SEGUNDO banco** e deixa o
-primeiro órfão — é o risco "duplicar recurso em dois states" concretizado, e **destruiria os
-dados que o checkpoint G4 usa** para provar o fluxo ponta a ponta.
-
-O **ensaio** do import acontece na **W2**, uma onda antes de você precisar dele.
+Import não é uma etapa automática quando a conta alvo está vazia. Antes do primeiro
+apply, verifique individualmente os três nomes gerenciados:
 
 ```bash
-# 1. Descobrir os identificadores reais
-aws rds describe-db-instances \
-  --query 'DBInstances[].{id:DBInstanceIdentifier,sg:VpcSecurityGroups[].VpcSecurityGroupId,subnets:DBSubnetGroup.DBSubnetGroupName}'
+# Conta vazia: cada consulta deve confirmar ausencia
+aws rds describe-db-instances --db-instance-identifier workshop-db
+aws rds describe-db-subnet-groups --db-subnet-group-name workshop-db-subnets
+aws ec2 describe-security-groups \
+  --filters Name=vpc-id,Values=vpc-xxxxxxxx Name=group-name,Values=workshop-db-sg
 
-# 2. Importar os três recursos no state NOVO, antes de qualquer apply
+# Se um recurso preexistente for confirmado como adotavel, importe somente ele
 terraform import aws_db_instance.postgres      workshop-db
 terraform import aws_db_subnet_group.this      workshop-db-subnets
 terraform import aws_security_group.db         sg-xxxxxxxxxxxx
@@ -79,9 +74,16 @@ terraform plan
 ```
 
 Regras não negociáveis:
-- **Nunca** rodar `apply` antes do `import` estar com `plan` limpo.
-- **Nunca** deixar os dois projetos (cluster e banco) gerenciando o mesmo recurso ao mesmo
-  tempo — remover os blocos `aws_db_*` do repo do cluster faz parte da mesma entrega.
+- **Nunca** rodar o primeiro `apply` sem inventariar os três tipos de recurso. A ausência
+  da instância não prova a ausência do subnet group ou do SG.
+- A existência do SG é determinada por VPC + nome, sem filtro de tag. Se existir,
+  valide `Project=workshop` separadamente; tag divergente exige reconciliação/import.
+- Se qualquer objeto existir fora deste state, **aborte** e reconcilie/importe; criação só
+  é permitida quando o inventário dos três estiver vazio.
+- **Nunca** deixar dois projetos gerenciarem o mesmo recurso.
+- Configuracao, state, plan e destroy aceitam somente os enderecos
+  `aws_db_instance.postgres`, `aws_db_subnet_group.this` e
+  `aws_security_group.db`; outro endereco e bloqueado mesmo se repetir um tipo permitido.
 - Se o `plan` pós-import quiser **substituir** (`must be replaced`) a instância, **pare**:
   ajuste a config até virar `update in-place` ou `no changes`. Replace = perda de dados.
 
@@ -120,13 +122,6 @@ resource "aws_security_group" "db" {
     security_groups = [data.terraform_remote_state.cluster.outputs.db_client_sg_id]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = { Project = var.project, Environment = var.environment }
 }
 
@@ -160,7 +155,7 @@ resource "aws_db_instance" "postgres" {
 }
 ```
 
-## Senha: nunca por state, nunca por output
+## Senha: nunca por output; protegida no state
 
 ```hcl
 variable "db_password" {
@@ -170,11 +165,18 @@ variable "db_password" {
 }
 ```
 
-- **`db_password` não trafega por remote state.** Vive em Environment secret do GitHub e é
-  consumido **igualmente** pelo Secret do Kubernetes e pela Lambda — não pelo `terraform_remote_state`.
+- **`db_password` não é output e não trafega por `terraform_remote_state`.** Vive em
+  Environment secret do GitHub e é consumido igualmente pelo Kubernetes e pela Lambda.
+- O valor fica no state do banco porque é atributo do `aws_db_instance`; o backend S3
+  criptografado e suas permissões são parte da proteção. `sensitive = true` apenas evita
+  exposição normal no CLI/log, não remove o valor do state.
 - `sensitive = true` na variável, e `::add-mask::` no step da pipeline que a manipula.
-- **Remover** o `output "db_password"` que existe hoje em `infra/eks/outputs.tf`.
 - Nada de valor default versionado. Nada de `terraform.tfvars` no git — só o `.example`.
+- Não use `lifecycle.ignore_changes` em `password`: alterar `TF_VAR_db_password` deve
+  rotacionar a senha master in-place. Preconfigure a mesma senha nos Environments dos
+  consumidores e faça o redeploy deles na mesma janela operacional do apply.
+- No Academy, mantenha exports de logs do RDS desabilitados. CloudWatch Log Groups
+  criados implicitamente ficam fora deste state e podem sobreviver ao destroy com custo residual.
 
 Outputs permitidos (não sensíveis):
 
@@ -207,18 +209,17 @@ não afirme HA onde não há.
 ```hcl
 terraform {
   backend "s3" {
-    bucket         = "workshop-tfstate-<sufixo>"
+    bucket         = "soat-tc3-tfstate-mateus-paz"
     key            = "database/terraform.tfstate" # chave PRÓPRIA, separada de cluster/
     region         = "us-east-1"
-    dynamodb_table = "workshop-tflock"
+    dynamodb_table = "soat-tc3-tflock"
     encrypt        = true
   }
 }
 ```
 
-Se o Academy bloquear S3/DynamoDB, o fallback é o `contracts/outputs.json` publicado como
-artifact pela pipeline do cluster e consumido aqui como `var` — ADR-005 registra a limitação.
-`terraform-cluster` testa isso na W0; você consome o veredicto.
+O spike W0 validou S3 e DynamoDB no Academy. `contracts/outputs.json` permanece fallback
+para o contrato de entrada do cluster, não para o state deste repositório.
 
 ## Gate
 
@@ -239,8 +240,8 @@ terraform plan -no-color | grep -c 'aws_db_'                              # deve
 aws rds describe-db-instances --db-instance-identifier workshop-db \
   --query 'DBInstances[0].PubliclyAccessible'                             # false
 
-# 4. import fiel: plan sem mudanças não intencionais
-terraform plan   # "No changes" (ou só diffs revisados e aprovados)
+# 4. conta vazia: plan cria os tres objetos esperados; recurso existente exige import
+terraform plan   # sem replacement nem mudancas destrutivas inesperadas
 ```
 
 **Conectividade provada de dentro da VPC, não da internet** — um pod no EKS conecta no RDS:
@@ -264,7 +265,7 @@ TESTCONTAINERS_HOST_OVERRIDE=localhost ./mvnw verify
 ## Riscos que você mitiga
 | Risco | Mitigação |
 |---|---|
-| **Criar um segundo banco e órfã o semeado** | `terraform import` obrigatório, ensaiado na W2, `plan` limpo antes de qualquer `apply` |
+| **Colidir com recurso fora do state** | Inventário separado dos três nomes; existência exige abortar, reconciliar/importar |
 | Terraform recriar o RDS por mudança trivial | State isolado, `plan` revisado linha a linha, `apply` com aprovação; `must be replaced` = pare |
 | Lambda não alcançar o RDS | Subnets privadas + rota + ingress do `db_client_sg_id`; teste de conectividade dedicado a partir da Lambda |
 | Expor senha em output ou log | Sem output de senha; `sensitive = true`; `::add-mask::`; senha só via Environment secret |
@@ -272,15 +273,12 @@ TESTCONTAINERS_HOST_OVERRIDE=localhost ./mvnw verify
 | Banco público por descuido | `publicly_accessible = false` + policy check na pipeline barrando `true` |
 
 ## Como usar este agente
-1. Ler `infra/eks/main.tf` (blocos `aws_db_*`), `infra/eks/outputs.tf` e
-   `infra/eks/variables.tf` antes de extrair — a config atual é o ponto de partida fiel.
-2. **W2 (ensaio):** rodar o `terraform import` num state descartável e provar `plan` limpo.
-   Documentar os identificadores reais descobertos.
-3. **W3:** criar o repo com state próprio (`database/`), consumir `cluster/` via
-   `terraform_remote_state` read-only, importar os 3 recursos, provar `plan` limpo, e só então
-   aplicar as mudanças intencionais (ingress via `db_client_sg_id`, `storage_encrypted`,
-   backup, remoção do output de senha).
-4. Coordenar com `terraform-cluster` a remoção dos blocos `aws_db_*` do repo do cluster — os
-   dois states nunca podem gerenciar o mesmo recurso simultaneamente.
+1. Ler a configuração atual deste repositório e o contrato de outputs do cluster antes
+   de alterar recursos; o código versionado ganha de snapshots antigos do planejamento.
+2. **Antes do primeiro apply:** inventariar instância, subnet group e SG. Com os três
+   ausentes, revisar a criação nova; se algum existir, abortar e reconciliar/importar.
+3. **W3:** consumir `cluster/` via `terraform_remote_state` read-only e provar no plan
+   ingress via `db_client_sg_id`, `storage_encrypted` e `publicly_accessible = false`.
+4. Confirmar que nenhum outro state gerencia os mesmos recursos.
 5. Criar pipeline `fmt` / `validate` / `plan` / `apply` com gate / `destroy` manual e protegida.
 6. Não escrever migrations, entidades JPA nem consultas — isso fica na aplicação.

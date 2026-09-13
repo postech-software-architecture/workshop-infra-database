@@ -2,16 +2,14 @@ name: CI — Terraform (database)
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
-# Um plan por ref; cancela o anterior ao empurrar de novo.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: database-ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Minimo necessario: ler o repo e comentar o plan no PR.
 permissions:
   contents: read
 
@@ -19,69 +17,53 @@ jobs:
   validate:
     name: fmt, validate e tflint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
-
       - name: terraform fmt
         run: terraform fmt -check -recursive -diff
-
-      # -backend=false: valida sintaxe e contrato de outputs sem tocar em state
-      # nem exigir credencial AWS. E o que roda em PR.
       - name: terraform init (sem backend)
         run: terraform init -backend=false -input=false
-
       - name: terraform validate
         run: terraform validate -no-color
-
       - name: tfsec
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-          soft_fail: true # W1: reporta sem bloquear. Vira bloqueante na W6.
+          # O Academy permite concessoes documentadas; as invariantes da W3
+          # permanecem bloqueantes no job abaixo.
+          soft_fail: true
 
-  # O `plan` real exige credencial do Academy (expira ~4h) e so roda quando os
-  # secrets do Environment existirem. Ate lá o job e pulado explicitamente, para
-  # nao dar falso verde — o mesmo erro que o cd.yml do repo da app comete hoje.
-  plan:
-    name: terraform plan (prod)
+  database-policy:
+    name: fronteira e seguranca do banco
     needs: validate
-    if: github.event_name == 'pull_request' && vars.AWS_CREDENTIALS_READY == 'true'
     runs-on: ubuntu-latest
-    environment: prod
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.8
-          terraform_wrapper: false
-
-      - name: Configurar credenciais (Academy — inclui SESSION_TOKEN)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-
-      - name: terraform init
-        run: terraform init -input=false
-
-      - name: terraform plan
-        run: terraform plan -input=false -no-color
-
-      # Fronteira do §1 do plano, verificada pela pipeline: este repo nao pode
-      # declarar cluster nem rede — ambos vivem no repo de cluster e sao LIDOS
-      # via contrato. Falha o job se um recurso proibido aparecer no plan.
-      - name: Verificar fronteira (nenhum EKS/VPC gerenciado aqui)
+      - name: Bloquear recursos fora do state de database
+        shell: bash
+        run: bash .github/scripts/check-resource-boundary.sh
+      - name: Exigir RDS privado e criptografado
+        shell: bash
         run: |
-          terraform plan -input=false -no-color > plan.txt
-          if grep -qE '^\s*[+~-]?\s*resource "(aws_eks_|aws_vpc|aws_subnet|aws_nat_gateway|aws_internet_gateway)' plan.txt; then
-            echo "::error::Este repo nao pode declarar EKS/VPC (fronteira do plano, gate G3)"
+          set -Eeuo pipefail
+          grep -R -qE --include='*.tf' --exclude-dir=.terraform 'publicly_accessible[[:space:]]*=[[:space:]]*false' . || {
+            echo "::error::publicly_accessible=false e obrigatorio."
+            exit 1
+          }
+          grep -R -qE --include='*.tf' --exclude-dir=.terraform 'storage_encrypted[[:space:]]*=[[:space:]]*true' . || {
+            echo "::error::storage_encrypted=true e obrigatorio."
+            exit 1
+          }
+          if grep -R -nE --include='*.tf' --exclude-dir=.terraform '(^|[[:space:]])(cidr_blocks|ipv6_cidr_blocks)[[:space:]]*=' .; then
+            echo "::error::O SG do banco nao aceita ingress por CIDR."
             exit 1
           fi
-          echo "OK: nenhum recurso de cluster/rede no plan"
+          grep -R -qE --include='*.tf' --exclude-dir=.terraform 'security_groups[[:space:]]*=[[:space:]]*\[local\.db_client_sg_id\]' . || {
+            echo "::error::O ingress deve usar exclusivamente db_client_sg_id."
+            exit 1
+          }
