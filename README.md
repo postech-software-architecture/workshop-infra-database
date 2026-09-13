@@ -48,6 +48,11 @@ Um SG de mesmo nome sem a tag esperada ainda existe e causa colisao; ele deve se
 reconciliado ou importado, nunca ignorado por um filtro de tags. Os workflows fazem
 essas duas verificacoes em sequencia.
 
+O inventario anterior ao primeiro plan le os outputs necessarios diretamente do
+objeto `cluster/terraform.tfstate` no S3. Ele nao usa `terraform console`, pois o
+state deste repositorio ainda esta vazio nesse momento e data sources ainda seriam
+reportados como valores desconhecidos.
+
 Exemplo de recuperacao, somente depois de confirmar que o objeto existente deve ser
 adotado por este state:
 

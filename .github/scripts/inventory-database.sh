@@ -46,7 +46,7 @@ else
   exit 1
 fi
 
-expected_vpc_id="$(printf 'local.vpc_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
+expected_vpc_id="$(bash .github/scripts/read-cluster-output.sh vpc_id)"
 [[ "${expected_vpc_id}" =~ ^vpc-[0-9a-f]+$ ]] || {
   echo "::error::Contrato do cluster nao forneceu VPC valida."
   exit 1

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 aws rds wait db-instance-available --db-instance-identifier workshop-db
 
-expected_client_sg="$(printf 'local.db_client_sg_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
+expected_client_sg="$(bash .github/scripts/read-cluster-output.sh db_client_sg_id)"
 db_sg_id="$(terraform output -raw db_security_group_id)"
 [[ "${expected_client_sg}" =~ ^sg-[0-9a-f]+$ && "${db_sg_id}" =~ ^sg-[0-9a-f]+$ ]] || {
   echo "::error::IDs de security group invalidos no contrato/state."

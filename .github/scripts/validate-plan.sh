@@ -12,7 +12,7 @@ plan_json="${RUNNER_TEMP:-/tmp}/database-${operation}-plan.json"
 trap 'rm -f "${plan_json}"' EXIT
 terraform show -json "${plan_file}" >"${plan_json}"
 
-expected_client_sg="$(printf 'local.db_client_sg_id\n' | terraform console -no-color | tail -n 1 | tr -d '"\r')"
+expected_client_sg="$(bash .github/scripts/read-cluster-output.sh db_client_sg_id)"
 [[ "${expected_client_sg}" =~ ^sg-[0-9a-f]+$ ]] || {
   echo "::error::Contrato do cluster nao forneceu db_client_sg_id valido."
   exit 1
