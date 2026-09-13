@@ -47,6 +47,9 @@ jobs:
       - name: Bloquear recursos fora do state de database
         shell: bash
         run: bash .github/scripts/check-resource-boundary.sh
+      - name: Validar leitura do contrato antes do primeiro plan
+        shell: bash
+        run: bash .github/scripts/test-read-cluster-output.sh
       - name: Exigir RDS privado e criptografado
         shell: bash
         run: |
