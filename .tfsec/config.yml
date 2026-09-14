@@ -1,0 +1,9 @@
+# Excecoes temporarias do banco efemero no AWS Academy.
+exclude:
+  # Deletion protection impediria o destroy obrigatorio ao fim de cada sessao.
+  - aws-rds-enable-deletion-protection
+  # A aplicacao e a Lambda usam o usuario PostgreSQL contratual nesta fase; migrar
+  # para IAM DB Authentication exige mudanca de runtime fora do escopo da W6.
+  - aws-rds-enable-iam-auth
+  # Performance Insights adiciona custo e nao e necessario para o G6.
+  - aws-rds-enable-performance-insights

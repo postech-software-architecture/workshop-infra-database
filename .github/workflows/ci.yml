@@ -33,9 +33,8 @@ jobs:
       - name: tfsec
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-          # O Academy permite concessoes documentadas; as invariantes da W3
-          # permanecem bloqueantes no job abaixo.
-          soft_fail: true
+          soft_fail: false
+          additional_args: --config-file .tfsec/config.yml
 
   database-policy:
     name: fronteira e seguranca do banco
@@ -70,3 +69,18 @@ jobs:
             echo "::error::O ingress deve usar exclusivamente db_client_sg_id."
             exit 1
           }
+
+  iac-security:
+    name: IaC security (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar misconfigurations e secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
