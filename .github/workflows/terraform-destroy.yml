@@ -12,11 +12,12 @@ permissions:
   contents: read
 
 env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TF_VAR_cluster_state_bucket: soat-tc3-tfstate-mateus-paz
-  BACKEND_BUCKET: soat-tc3-tfstate-mateus-paz
-  LOCK_TABLE: soat-tc3-tflock
+  TF_VAR_cluster_state_bucket: ${{ vars.TFSTATE_BUCKET }}
+  BACKEND_BUCKET: ${{ vars.TFSTATE_BUCKET }}
+  LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
 
 jobs:
   confirmation:
@@ -51,7 +52,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
@@ -60,7 +61,11 @@ jobs:
         shell: bash
         run: bash .github/scripts/preflight-backend.sh
       - name: terraform init
-        run: terraform init -input=false -no-color
+        run: |
+          terraform init -input=false -no-color \
+            -backend-config="bucket=${BACKEND_BUCKET}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${LOCK_TABLE}"
       - name: Exigir banco completo na AWS e no state
         shell: bash
         env:
