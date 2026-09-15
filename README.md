@@ -82,10 +82,10 @@ O backend S3 esta ativo em `versions.tf` com:
 
 | Campo | Valor |
 |---|---|
-| bucket | `soat-tc3-tfstate-mateus-paz` |
+| bucket | variable `TFSTATE_BUCKET` do Environment `prod` |
 | key | `database/terraform.tfstate` |
 | regiao | `us-east-1` |
-| lock DynamoDB | `soat-tc3-tflock` |
+| lock DynamoDB | variable `TFSTATE_LOCK_TABLE` do Environment `prod` |
 | criptografia | habilitada |
 
 Bucket e tabela sao o bootstrap externo validado na W0 e precisam existir antes do
@@ -161,7 +161,7 @@ entrega e voltam a ser consultados diretamente na AWS depois do apply.
 Os workflows AWS exigem `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN` e `DB_PASSWORD` no Environment `prod`. Credenciais do Academy
 expiradas falham antes do `terraform init`. O bucket
-`soat-tc3-tfstate-mateus-paz` e a tabela `soat-tc3-tflock` sao bootstrap externo:
+O bucket da variable `TFSTATE_BUCKET` e a tabela de `TFSTATE_LOCK_TABLE` sao bootstrap externo:
 devem estar ativos antes do plan/apply/destroy e nunca sao removidos por estes
 workflows. O preflight exige versionamento, criptografia, bloqueio publico completo e
 lock ativo antes de qualquer operacao. No Academy, o destroy nao cria snapshot
