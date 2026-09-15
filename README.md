@@ -1,10 +1,56 @@
 # workshop-infra-database
 
-Banco gerenciado da **Fase 3** do Tech Challenge (SOAT): RDS PostgreSQL em subnets
-privadas, com criptografia em repouso, backup automatico e acesso restrito por
-security group.
+> Banco de dados gerenciado da **Fase 3** do Tech Challenge (SOAT): **RDS PostgreSQL**
+> em subnets privadas, com criptografia em repouso, backup automatico e acesso restrito
+> por security group. **State proprio**, separado do cluster.
 
-**State proprio**, separado do cluster.
+---
+
+## Proposito
+
+Provisiona a camada de persistencia da Fase 3 com um ciclo de vida independente do
+cluster, de modo que o banco possa ser aplicado, rotacionado ou destruido sem tocar na
+rede e na computacao.
+
+| Entrega | Detalhe |
+|---|---|
+| **Instancia** | `aws_db_instance.postgres` — RDS PostgreSQL, **nao publico**, criptografado |
+| **Rede** | `aws_db_subnet_group.this` — subnet group nas subnets privadas lidas do contrato do cluster |
+| **Acesso** | `aws_security_group.db` — ingress TCP/5432 **exclusivamente** do `db_client_sg_id` |
+| **Resiliencia** | Backup automatico com retencao de 7 dias, janela fora do horario de demonstracao |
+
+O banco e consumido tanto pela aplicacao no EKS quanto pela Lambda de autenticacao por
+CPF, que verifica a elegibilidade do cliente.
+
+A CI exige exatamente esses tres enderecos gerenciados. Qualquer outro e bloqueado,
+inclusive outro recurso dos mesmos tipos permitidos.
+
+---
+
+## Tecnologias utilizadas
+
+| Camada | Tecnologia |
+|---|---|
+| IaC | **Terraform >= 1.6**, provider AWS `~> 5.60` |
+| Banco | **Amazon RDS PostgreSQL** (`var.engine_version`, `var.instance_class`) |
+| State | Backend **S3** (`database/terraform.tfstate`) com lock em **DynamoDB**, criptografado |
+| Contrato | `terraform_remote_state` lendo `cluster/terraform.tfstate` (com fallback por `contracts/outputs.json`) |
+| Seguranca | Criptografia em repouso, instancia privada, SG sem CIDR aberto, senha via Environment secret |
+| Migrations | **Flyway** — permanece no repositorio da aplicacao, **nao** aqui |
+| CI/CD | GitHub Actions — `ci.yml` sem credenciais em PR; plan/apply/destroy manuais com confirmacao textual |
+| Ambiente | **AWS Academy Learner Lab** (credenciais temporarias ~4h) |
+
+---
+
+## Ordem de execucao na Fase 3
+
+```text
+APPLY:    workshop-infra-kubernetes → workshop-infra-database → workshop-auth-serverless
+DESTROY:  workshop-auth-serverless → workshop-infra-database → workshop-infra-kubernetes
+```
+
+O destroy do banco deve terminar **antes** do destroy do cluster, pois o banco consome a
+VPC e as subnets do state `cluster/`.
 
 ## Fronteira
 
@@ -131,7 +177,7 @@ com a senha anterior perde acesso ao banco.
 - exports de logs do RDS desabilitados neste ambiente Academy para nao criar CloudWatch
   Log Groups fora deste state, que sobreviveriam ao destroy e poderiam deixar custo residual
 
-## Rodar
+## Como executar e fazer deploy
 
 ```bash
 terraform fmt -check
@@ -178,6 +224,47 @@ e no state (`CREATE`), ou os tres presentes em ambos (`MANAGED`). Recurso apenas
 AWS exige import/reconciliacao; recurso apenas no state indica drift; topologia
 parcial tambem bloqueia. O destroy do banco deve terminar **antes** do destroy do
 cluster, pois o banco consome a VPC e as subnets do state `cluster/`.
+
+## Diagrama da arquitetura
+
+<!-- TODO: inserir o diagrama da topologia do banco
+     (VPC → subnets privadas → DB subnet group → RDS PostgreSQL, com o ingress 5432
+     originado exclusivamente do db_client_sg_id vindo do EKS e da Lambda).
+     Sugestao: versionar em docs/. -->
+
+```text
+[ reservado para o diagrama da topologia de rede e persistencia do RDS ]
+```
+
+> O diagrama ER do modelo de dados vive em
+> [soat-architecture](https://github.com/postech-software-architecture/soat-architecture/blob/main/docs/architecture/diagrams/database-er.mmd).
+
+---
+
+## APIs — Swagger / Postman
+
+Este repositorio provisiona infraestrutura de dados e **nao expoe API HTTP**. Sua
+interface e o endpoint PostgreSQL (TCP/5432), publicado como output do Terraform e
+acessivel somente de dentro da VPC:
+
+```bash
+terraform output db_endpoint            # host:porta
+terraform output db_host
+terraform output db_name
+terraform output db_security_group_id
+```
+
+As APIs que consomem este banco estao especificadas em:
+
+| API | Especificacao |
+|---|---|
+| Workshop Service (API REST) | [`workshop-service-fase1/openapi.yaml`](https://github.com/postech-software-architecture/workshop-service-fase1/blob/main/openapi.yaml) — Swagger UI em `/swagger-ui.html` |
+| Autenticacao por CPF (Lambda) | [`workshop-auth-serverless/docs/openapi-auth.yaml`](https://github.com/postech-software-architecture/workshop-auth-serverless/blob/main/docs/openapi-auth.yaml) |
+
+O modelo de dados e os relacionamentos estao documentados em
+[soat-architecture](https://github.com/postech-software-architecture/soat-architecture/blob/main/docs/architecture/data/modelo-de-dados.md).
+
+---
 
 ## Agentes
 
