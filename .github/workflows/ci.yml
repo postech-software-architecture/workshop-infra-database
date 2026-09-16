@@ -30,12 +30,15 @@ jobs:
         run: terraform init -backend=false -input=false
       - name: terraform validate
         run: terraform validate -no-color
+      # Imagem pinada em vez de aquasecurity/tfsec-action: aquela action resolve
+      # a release pela API do GitHub sem token e falha por rate limit de forma
+      # intermitente. E a mesma forma usada em workshop-infra-kubernetes.
       - name: tfsec
-        uses: aquasecurity/tfsec-action@v1.0.3
+        uses: docker://aquasec/tfsec:v1.28.14
         with:
           # O Academy permite concessoes documentadas; as invariantes da W3
           # permanecem bloqueantes no job abaixo.
-          soft_fail: true
+          args: --soft-fail .
 
   database-policy:
     name: fronteira e seguranca do banco
