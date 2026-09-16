@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -30,12 +30,15 @@ jobs:
         run: terraform init -backend=false -input=false
       - name: terraform validate
         run: terraform validate -no-color
+      # Imagem pinada em vez de aquasecurity/tfsec-action: aquela action resolve
+      # a release pela API do GitHub sem token e falha por rate limit de forma
+      # intermitente. E a mesma forma usada em workshop-infra-kubernetes.
       - name: tfsec
-        uses: aquasecurity/tfsec-action@v1.0.3
+        uses: docker://aquasec/tfsec:v1.28.14
         with:
           # O Academy permite concessoes documentadas; as invariantes da W3
           # permanecem bloqueantes no job abaixo.
-          soft_fail: true
+          args: --soft-fail .
 
   database-policy:
     name: fronteira e seguranca do banco
@@ -43,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Bloquear recursos fora do state de database
         shell: bash
         run: bash .github/scripts/check-resource-boundary.sh
