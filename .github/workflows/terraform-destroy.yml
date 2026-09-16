@@ -16,8 +16,9 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   TF_VAR_cluster_state_bucket: ${{ vars.TFSTATE_BUCKET }}
-  BACKEND_BUCKET: ${{ vars.TFSTATE_BUCKET }}
-  LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
+  TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
+  TFSTATE_LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
+  TFSTATE_KEY: database/terraform.tfstate
 
 jobs:
   confirmation:
@@ -46,14 +47,14 @@ jobs:
     env:
       TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -63,9 +64,9 @@ jobs:
       - name: terraform init
         run: |
           terraform init -input=false -no-color \
-            -backend-config="bucket=${BACKEND_BUCKET}" \
+            -backend-config="bucket=${TFSTATE_BUCKET}" \
             -backend-config="region=${AWS_REGION}" \
-            -backend-config="dynamodb_table=${LOCK_TABLE}"
+            -backend-config="dynamodb_table=${TFSTATE_LOCK_TABLE}"
       - name: Exigir banco completo na AWS e no state
         shell: bash
         env:
