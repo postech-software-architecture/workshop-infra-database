@@ -31,7 +31,7 @@ inclusive outro recurso dos mesmos tipos permitidos.
 
 | Camada | Tecnologia |
 |---|---|
-| IaC | **Terraform >= 1.6**, provider AWS `~> 5.60` |
+| IaC | **Terraform >= 1.6** (CI fixada em `1.9.8`), provider AWS `~> 5.60` |
 | Banco | **Amazon RDS PostgreSQL** (`var.engine_version`, `var.instance_class`) |
 | State | Backend **S3** (`database/terraform.tfstate`) com lock em **DynamoDB**, criptografado |
 | Contrato | `terraform_remote_state` lendo `cluster/terraform.tfstate` (com fallback por `contracts/outputs.json`) |
@@ -124,15 +124,18 @@ ADR-005): as vars `*_fallback`, alimentadas pelo artifact `contracts/outputs.jso
 
 ## Backend e senha
 
-O backend S3 esta ativo em `versions.tf` com:
+O backend S3 e **parcial**: um bloco `backend` nao aceita interpolacao, entao apenas os
+campos fixos ficam em `versions.tf` e o resto chega por `-backend-config` no `init`.
 
-| Campo | Valor |
-|---|---|
-| bucket | variable `TFSTATE_BUCKET` do Environment `prod` |
-| key | `database/terraform.tfstate` |
-| regiao | `us-east-1` |
-| lock DynamoDB | variable `TFSTATE_LOCK_TABLE` do Environment `prod` |
-| criptografia | habilitada |
+| Campo | Onde e definido | Valor |
+|---|---|---|
+| key | `versions.tf` | `database/terraform.tfstate` |
+| criptografia | `versions.tf` | `encrypt = true` |
+| bucket | `-backend-config` no init | variable `TFSTATE_BUCKET` do Environment `prod` |
+| regiao | `-backend-config` no init | `us-east-1` |
+| lock DynamoDB | `-backend-config` no init | variable `TFSTATE_LOCK_TABLE` do Environment `prod` |
+
+E por isso que o nome da conta nunca fica fixado no codigo.
 
 Bucket e tabela sao o bootstrap externo validado na W0 e precisam existir antes do
 `terraform init` com backend. `terraform init -backend=false` continua disponivel
@@ -186,7 +189,14 @@ terraform validate # sem credencial
 
 export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
 export TF_VAR_db_password='...'
-terraform init && terraform plan
+
+# Backend parcial: os tres campos abaixo nao estao em versions.tf
+terraform init \
+  -backend-config="bucket=${TFSTATE_BUCKET}" \
+  -backend-config="region=us-east-1" \
+  -backend-config="dynamodb_table=${TFSTATE_LOCK_TABLE}"
+
+terraform plan
 ```
 
 Antes do primeiro apply, execute o inventario dos tres objetos descrito acima. State,
@@ -199,15 +209,15 @@ entrega e voltam a ser consultados diretamente na AWS depois do apply.
 
 | Workflow | Gatilho | Protecao principal |
 |---|---|---|
-| `ci.yml` | push/PR | fmt/validate e gates estaticos de fronteira, RDS privado, criptografia e SG sem CIDR |
+| `ci.yml` | push/PR | `fmt`/`validate`, tfsec (soft-fail) e gates estaticos de fronteira, RDS privado, criptografia e SG sem CIDR |
 | `terraform-plan.yml` | manual na `main` | texto `PLANEJAR DATABASE PROD`, Environment `prod`, inventario AWS x state e gates sobre o plan real |
 | `terraform-apply.yml` | manual na `main` | texto `APLICAR DATABASE PROD`, Environment `prod`, inventario e bloqueio de replace/destroy |
 | `terraform-destroy.yml` | manual na `main` | texto `DESTRUIR DATABASE ANTES DO CLUSTER`, Environment `prod` e destroy isolado |
 
 Os workflows AWS exigem `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN` e `DB_PASSWORD` no Environment `prod`. Credenciais do Academy
-expiradas falham antes do `terraform init`. O bucket
-O bucket da variable `TFSTATE_BUCKET` e a tabela de `TFSTATE_LOCK_TABLE` sao bootstrap externo:
+expiradas falham antes do `terraform init`. O bucket da variable `TFSTATE_BUCKET` e a
+tabela de `TFSTATE_LOCK_TABLE` sao bootstrap externo:
 devem estar ativos antes do plan/apply/destroy e nunca sao removidos por estes
 workflows. O preflight exige versionamento, criptografia, bloqueio publico completo e
 lock ativo antes de qualquer operacao. No Academy, o destroy nao cria snapshot
@@ -225,16 +235,35 @@ AWS exige import/reconciliacao; recurso apenas no state indica drift; topologia
 parcial tambem bloqueia. O destroy do banco deve terminar **antes** do destroy do
 cluster, pois o banco consome a VPC e as subnets do state `cluster/`.
 
-## Diagrama da arquitetura
+## Diagrama de componentes
 
-<!-- TODO: inserir o diagrama da topologia do banco
-     (VPC → subnets privadas → DB subnet group → RDS PostgreSQL, com o ingress 5432
-     originado exclusivamente do db_client_sg_id vindo do EKS e da Lambda).
-     Sugestao: versionar em docs/. -->
+Visao de nuvem, APIs, banco e monitoramento, organizada pela fronteira deste
+repositorio: o que ele **gerencia**, o que ele **le por contrato** e o que apenas
+**consome** seus outputs.
 
-```text
-[ reservado para o diagrama da topologia de rede e persistencia do RDS ]
-```
+![Diagrama de componentes do workshop-infra-database](docs/diagrama_componente_workshop_database.png)
+
+Fonte editavel: [`docs/diagrama_componente_workshop_database.drawio`](docs/diagrama_componente_workshop_database.drawio)
+— abra em [draw.io](https://app.diagrams.net) e reexporte o PNG ao alterar.
+
+| Bloco | O que mostra |
+|---|---|
+| **CI/CD — GitHub Actions** | `ci.yml` e os workflows manuais de plan/apply/destroy, com os guard rails de `.github/scripts` que cada um executa |
+| **Contrato de entrada (read-only)** | `data.terraform_remote_state.cluster` e as vars de fallback convergindo para os `locals` — `vpc_id`, `private_subnet_ids`, `db_client_sg_id` |
+| **Fora do escopo deste repo** | `workshop-infra-kubernetes`, nodes do EKS, Lambda de auth por CPF e `workshop-auth-serverless` — origem do contrato e consumidores do banco |
+| **AWS — recursos gerenciados** | os tres unicos enderecos: `aws_security_group.db`, `aws_db_subnet_group.this` e `aws_db_instance.postgres` |
+| **Contrato de saida** | `outputs.tf` — host, porta, nome, usuario, endpoint e identificadores consumidos pelos outros repos |
+| **State proprio** | `variables.tf`, `providers.tf` e o backend separado do cluster |
+
+**Acesso ao banco:** as duas unicas setas que chegam na porta 5432 saem dos nodes do EKS
+e da Lambda, ambas via `db_client_sg_id`. Nao ha CIDR aberto e `publicly_accessible` e
+`false` — criterio do gate G3.
+
+**Monitoramento:** aparece no proprio recurso como `monitoring_interval = 0`. O RDS
+continua publicando as metricas nativas no CloudWatch (CPU, memoria, espaco livre,
+conexoes); o que esta desligado e o Enhanced Monitoring, que exigiria uma IAM role
+indisponivel no Academy, e o export de logs, que criaria Log Groups residuais fora
+deste state. Ver [Seguranca](#seguranca).
 
 > O diagrama ER do modelo de dados vive em
 > [soat-architecture](https://github.com/postech-software-architecture/soat-architecture/blob/main/docs/architecture/diagrams/database-er.mmd).
